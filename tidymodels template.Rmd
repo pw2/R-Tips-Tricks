@@ -1,0 +1,347 @@
+---
+title: "Tidymodels Template"
+author: "Patrick Ward"
+date: "12/10/2021"
+output: html_document
+---
+
+The aim of this template is to provide a step-by-step approach to model building within the `tidymodels` framework. It is not meant to be exhaustive as `tidymodels` is extensive with respect to its functionality and the types of models that can be fit.
+
+### Resources
+
+**Tidymodels homepage:** https://www.tidymodels.org/
+**Tidy Modeling with R:** https://www.tmwr.org/
+**ISLR tidymodels labs:** https://emilhvitfeldt.github.io/ISLR-tidymodels-labs/index.html
+
+
+## Load Packages & Data
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+
+df <- mtcars
+df %>% head()
+
+## Create some missing values so that the data will require pre-processing when you create your model recipe
+
+df[8, 4] <- NA
+df[c(20, 3) ,6] <- NA
+df[c(27, 10), 7] <- NA
+
+```
+
+**NOTE: Prior to splitting data and moving into the model building process, you would commonly perform exploratory data analysis here to acquaint yourself with the data.**
+
+## Split Data
+
+**Train/Test Split**
+
+Create your train and test splits so that you can hold a portion of the data out, to officially test the model once the final model has been built.
+
+
+```{r}
+set.seed(3333)
+car_split <- initial_split(mtcars)
+car_split
+
+train <- training(car_split)
+test <- testing(car_split)
+```
+
+
+**Cross Validation**
+
+We can further split our training data into cross validation folds to fit the model to a portion of the training data and then test it on a holdout set, repeating this process `k` number of times.
+
+```{r}
+set.seed(34)
+cv_folds <- vfold_cv(
+  data = train, 
+  v = 5
+  ) 
+
+cv_folds
+```
+
+
+## Model Specification
+
+Here we can specify one or many models that we might be interested in fitting.
+
+```{r}
+## linear regression
+lm_spec <- linear_reg() %>% 
+  set_engine("lm") %>%
+  set_mode("regression")
+
+## random forest
+rf_spec <- 
+  rand_forest(
+    mtry = tune()
+    ) %>%
+  set_mode("regression") %>%
+  set_engine("randomForest", importance = TRUE)
+```
+
+
+## Recipe
+
+The recipe is where you tell `tidymodels` how you want to handle the data:
+
+* Which features you want to use
+* How to pre-process those features
+* And do any extra feature engineering
+
+All 75 `step_` functions for pre-processing and feature engineering can be searched found here: **https://www.tidymodels.org/find/recipes/**
+
+```{r}
+## create a lnear model and impute the median for all NA values in predictor variables
+car_rec <- 
+  recipe(disp ~ hp + drat + wt + qsec,
+                  data = train) %>%
+  step_impute_median(all_numeric_predictors())
+
+# Look at the steps that were performed in the recipe
+car_rec %>%
+  prep()
+
+## See how the steps effected the train data
+car_rec %>%
+  prep() %>%
+  bake(new_data = NULL)
+
+## See how the steps effected the test data
+car_rec %>%
+  prep() %>%
+  bake(new_data = test)
+
+```
+
+
+## Workflow/Workflow Sets
+
+* If you are only fitting one model then you only need a single `workflow`
+* If you are fitting more than one model, simultaneously, then you can use a `workflowset`
+
+I'll show both options below.
+
+**Create a single workflow**
+
+```{r}
+lm_wf <- workflow() %>% 
+  add_recipe(car_rec) %>% 
+  add_model(lm_spec)
+
+lm_wf
+
+```
+
+
+**Create a workflow set for multiple models**
+
+```{r}
+reg_wfs <- 
+  workflow_set(
+    preproc = list(car_rec),
+    models = list(lm_spec, rf_spec),
+    cross = TRUE
+  )
+
+reg_wfs
+  
+```
+
+
+## Fit Model on Training Data
+
+**Fit workflow to CV-Folds**
+
+```{r}
+car_lm <- lm_wf %>% 
+  fit_resamples(
+    resamples = cv_folds
+  )
+
+car_lm
+
+```
+
+
+**Tune the random forest in the workflow set to the CV-folds**
+
+```{r}
+doParallel::registerDoParallel(cores = 5)
+
+car_wfs <- 
+  reg_wfs %>%  
+  workflow_map(
+    seed = 67, 
+    fn = "tune_grid",
+    grid = 10, # params to pass to tune grid
+    resamples = cv_folds
+  )
+
+doParallel::stopImplicitCluster()
+
+car_wfs
+
+
+### If there was no tuning that needed to take plate remove the fn and grid arguments
+# car_wfs <- workflow_map(
+#     reg_wfs,
+#     "fit_resamples",
+#     resamples = cv_folds,
+#     seed = 67
+#   )
+
+```
+
+
+## Evaluate Model Outputs
+
+**single workflow**
+
+```{r}
+collect_metrics(car_lm)
+```
+
+
+**workflow set**
+
+```{r}
+autoplot(car_wfs)
+
+collect_metrics(car_wfs)
+
+rank_results(car_wfs, rank_metric = "rmse", select_best = TRUE)
+```
+
+
+## Make Predictions on Test Data
+
+**single workflow**
+
+```{r}
+single_wf_final <- lm_wf %>% 
+  last_fit(
+    split = car_split
+  )
+
+## see results
+collect_metrics(single_wf_final)
+
+## see predictions
+single_wf_final %>% collect_predictions()
+
+## add predictions in to test set
+test_pred_wf <- bind_cols(
+  test,
+  single_wf_final %>% collect_predictions() %>% dplyr::select(.pred))
+
+test_pred_wf %>%
+  ggplot(aes(x = .pred, y = disp)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red") +
+  expand_limits(y = 0)
+
+```
+
+
+**workflow set**
+
+```{r}
+## get the ID for the best fit model
+wfs_best_id <- car_wfs %>% 
+  rank_results(
+    rank_metric = "rmse",
+    select_best = TRUE
+  ) %>% 
+  slice(1) %>% 
+  pull(wflow_id)
+
+wfs_best_id
+
+## Get the best workflowset
+wf_best_fit <- extract_workflow(car_wfs, id = wfs_best_id)
+wf_best_fit
+
+## extract the tuned results from the best workflow
+wf_best_tuned <- car_wfs[car_wfs$wflow_id == wfs_best_id,
+                               "result"][[1]][[1]]
+
+wf_best_tuned
+
+collect_metrics(wf_best_tuned)
+autoplot(wf_best_tuned)
+select_best(wf_best_tuned, "rmse")
+
+
+## fit the final model
+wf_best_final <- finalize_workflow(wf_best_fit, select_best(wf_best_tuned, "rmse"))
+
+doParallel::registerDoParallel(cores = 5)
+
+wf_best_final_fit <- wf_best_final %>% 
+  last_fit(
+    split = car_split
+  )
+
+doParallel::stopImplicitCluster()
+
+wf_best_final_fit
+
+```
+
+
+## Save Model Workflow for Future Deployment
+
+**extract workflow & save**
+
+```{r}
+single_wf_model <- extract_workflow(single_wf_final)
+single_wf_model
+
+save(single_wf_model, file = "single_wf_model.rda")
+```
+
+
+**extract workflow set**
+
+```{r}
+wfs_model <- extract_workflow(wf_best_final_fit)
+wfs_model
+
+save(wfs_model, file = "wfs_model.rda")
+```
+
+
+## Load Saved Model and Deploy Workflow on new data
+
+**Create some fake data to predict on**
+
+```{r}
+new_dat <- tibble(
+  hp = c(220, 86),
+  drat = c(3.7, 2.2),
+  wt = c(2.11, 1.72),
+  qsec = c(15.9, 17.3)
+)
+```
+
+
+**Load single workflow and fit to new data**
+
+```{r}
+load("single_wf_model.rda")
+predict(single_wf_model, new_data = new_dat)
+```
+
+
+**Load workflow set and fit to new data**
+
+```{r}
+load("wfs_model.rda")
+predict(wfs_model, new_data = new_dat)
+```
+
