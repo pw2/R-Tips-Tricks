@@ -1,0 +1,331 @@
+---
+title: "Velocity-Based Training: Theory to Application"
+author: "Patrick Ward"
+date: "2/26/2022"
+output:
+  html_document:
+    toc: true
+    code_folding: "hide"
+---
+
+##### Reference 
+
+Weakley et al. (2022). **Velocity-Based Training: From Theory to Application**. *Strength Cond J*; 43(2): 31-49.
+
+
+##### Load the time series data 
+
+* Data is 17 weeks of mean concentric velocity (MCV) in the 100-kg back squat for a competitive powerlifter.
+
+**Technical Note:** I don't have the actual data from the paper. Therefore, I took a screen shot of **Figure 3** (provided in the text) and used an [open source web application](https://apps.automeris.io/wpd/) for extracting data from figures in research papers. This requires me to go through and manually click on the points in the figure itself. Consequently, I'm not be 100% perfect, so there may be subtle differences in my data set compared to what was used for the paper.
+
+```{r load-data, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+suppressPackageStartupMessages({
+  suppressWarnings({
+    library(tidyverse)
+    library(broom)
+  })
+})
+
+
+theme_set(theme_classic())
+
+dat <- read.csv("Weakley (2021) - VBT Data.csv", header = TRUE)
+dat %>%
+  head() %>%
+  knitr::kable()
+```
+
+
+##### Figure 3: Time Series Plot
+
+* We will create the figure that represents the changes overtime along with the corresponding standard (typical) error which was derived using a linear model of the maintenance phase of training (first ten sessions).
+
+**Adding a phase indicator**
+
+First, the data set I created doesn't have a designation of the `maintenance` and `training` phases, so I'll start by adding a new variable to the data called `phase` that will indicate which phase the athlete is in. This will be useful for both plotting purposes and for building statistics specific to certain phases.
+
+```{r add-phase}
+## Add phase column
+dat$phase <- c(rep("maintenance", 10), rep("training", 7))
+
+## observe data
+dat %>%
+  head() %>%
+  knitr::kable()
+```
+
+
+**Maintenance Phase linear regression**
+
+The authors' build a linear regression of the first 10 sessions, the `maintenance phase`. From the regression analysis, they then calculate the standard (typical) error that will be used for plotting error bars around each data point of the athlete's 100-kg back squat test. Additionally, they use the predicted values and standard errors to display shaded confidence intervals on the plot.
+
+First let's build the regression model from the `maintenance phase` data.
+
+
+```{r time-plot}
+## Create a linear model for the baseline
+maintenance_model <- dat %>%
+  filter(phase == "maintenance") %>%
+  lm(squat_mcv ~ week, data = .)
+
+## look the model output
+tidy(maintenance_model) %>%
+  knitr::kable()
+
+```
+
+
+**Model Standard Error**
+
+Next, we need to calculate the standard (typical) error. For this, the authors' recommend one of two approaches:
+
+* If you have group-based test-retest data, they recommend taking the difference between the test-retest outcomes and calculating the standard error as follows:
+
+$SE.group = sd(differences) / sqrt(2)$
+
+* If you have individual observations, they recommend calculating the standard error like this:
+
+$SE.individual = sqrt(sum.squared.residuals) / (n - 2))$
+
+Since we have individual data, we will use the second option. Here, the `sum of squared residuals` is referring to the residuals of our regression model. The `n` in the equation refers to the number of observations, which in our example is 10. We can calculate the standard error like so:
+
+
+```{r se-ind}
+## number of observations in the maintenance phase that were used to build the model
+n <- length(dat$squat_mcv[dat$phase == "maintenance"])
+
+## Get the standard error
+individual_se <- sqrt(sum(maintenance_model$residuals^2) / (n - 2))
+individual_se
+
+```
+
+If you don't want to calculate it by hand, you can also extract it from the model itself. If you look at the model summary, you will see that the same value I just calculated is referred to as the `Residual standard error` in the bottom chuck of the output:
+
+```{r model-summary}
+summary(maintenance_model)
+```
+
+
+If you want to extract it directly and not mess with doing math, you can use this code:
+
+```{r sigma}
+summary(maintenance_model)$sigma
+```
+
+
+**t-critical value**
+
+One last thing before plotting is that we need to create the `t-critical value` for our confidence intervals for the grey shaded region. In the paper, the authors' used a confidence interval of 80% (an alpha level of 0.2).
+
+We can calculate this from a t-distribution:
+
+```{r t-crit}
+## Get the critical value for the confidence interval
+conf_level <- 0.8
+t_crit <- qt(p = (1 - conf_level)/2, df = 10-1, lower = FALSE)
+
+t_crit
+```
+
+**Creating the Plot**
+
+There are a few "preparation" steps that I use just before constructing the plot:
+
+1) I create a variable `i` and `s` which are the `intercept` and `slope` from our `maintenance phase regression model`. You'll notice that I add them to the data set but only represent their values in the `maintenance phase` and then have them represented as `NA` in the `training phase`. This is because in the paper the authors' only visualized the regression line for the `maintenance phase`, so I will do the same here.
+
+2) I create predicted values, `preds`, and the standard error for the predictions, `se_preds` so that I can build the shaded 80% CI range for the plot.
+
+3) You'll notice in the plot that I use `geom_ribbon()` to create the shaded region and it is here that I create the 80% CI. The authors' used the following equation for the CI of the trend:
+
+$CI = predicted.value ± (t.critical.value * se.prediction * sqrt(2))$
+
+```{r figure3-plt}
+
+## plot
+dat %>%
+  mutate(i = ifelse(phase == "maintenance", 0.9, NA),
+         s = ifelse(phase == "maintenance", -0.000182, NA),
+         preds = predict(maintenance_model, newdata = .),
+         se_preds = predict(maintenance_model, newdata = ., se = TRUE)$se.fit) %>%
+  ggplot(aes(x = week, y = squat_mcv)) +
+  geom_ribbon(aes(ymin = preds - t_crit*se_preds*sqrt(2),
+            ymax = preds + t_crit*se_preds*sqrt(2)),
+            fill = "grey") +
+  geom_errorbar(aes(ymin = squat_mcv - individual_se,
+                    ymax = squat_mcv + individual_se),
+                width = 0.2) +
+  geom_point(shape = 21,
+             fill = "red",
+             color = "black",
+             size = 3) +
+  geom_abline(aes(intercept = i, 
+              slope = s),
+              color = "black") +
+  facet_wrap(~phase, scales = "free_x") +
+  ylim(0.5, 1.2) +
+  scale_x_continuous(labels = seq(1, 17, 1),
+                     breaks = seq(1, 17, 1)) +
+  labs(x = "Week",
+       y = "Squat MCV (m*s^-1",
+       title = "Mean Concentric Velocity from 100 kg Warm Up of Back Squat",
+       subtitle = "Error Bars = Mean ± SE\nShading = 80% CI for Practically Important Difference from Maintenance Phase SE") +
+  theme(strip.background = element_rect(fill = "black"),
+        strip.text = element_text(color = "white", face = "bold"))
+```
+
+
+##### Figure 5: Analysis of Change
+
+**Figure 5** of the paper is used to evaluate the change in squat velocity for the powerlifter in weeks 11-17 (the `training phase`) relative to the mean squat velocity form the `maintenance phase`, which represents the athlete's baseline.
+
+
+**Data preparation**
+
+To begin, we create four new columns:
+
+1) Baseline average for the `maintenance phase`
+2) The difference between the observed MVC in each training week and the maintenance average
+3) Calculate the t-critical value for the 90% CI
+4) Calculate the Lower 90% CI
+5) Calculate the Upper 90% CI
+
+After that, we subset out only the `training phase` since that is all we care about for this figure.
+
+```{r train-phase}
+## Get the critical value for 90% CI
+conf_level <- 0.9
+t_crit <- qt(p = (1 - conf_level)/2, df = 10-1, lower = FALSE)
+
+
+training <- dat %>% 
+  mutate(base_avg = round(mean(squat_mcv[phase == "maintenance"]), 2),
+         diff = squat_mcv - base_avg,
+         lower_ci = round(diff - t_crit*individual_se*sqrt(2), 2),
+         upper_ci = round(diff + t_crit*individual_se*sqrt(2), 2)) %>%
+  filter(phase == "training")
+
+training %>%
+  head() %>%
+  knitr::kable()
+  
+```
+
+
+**Build the plot**
+
+```{r figure5-plt, fig.width = 12}
+library(grid)
+library(ggpubr)
+
+tbl <- ggtexttable(training[, c('week', 'squat_mcv', 'diff', 'lower_ci', 'upper_ci')],
+            rows = NULL,
+            theme= ttheme("light"),
+            cols = c("Week", "Squat MCV", "Diff\nto Baseline", "Lower CI", "Upper CI"))
+
+
+plt <- training %>%
+  ggplot(aes(x = diff, y = as.factor(week))) +
+  geom_rect(aes(xmin = -0.03, 
+                xmax = 0.03),
+            ymin = 0,
+            ymax = Inf,
+            fill = "light grey",
+            alpha = 0.5) +
+  geom_errorbar(aes(xmin = lower_ci, xmax = upper_ci),
+                width = 0.1) +
+  geom_vline(xintercept = 0,
+             size = 1.2) +
+  geom_point(size = 3) +
+  scale_y_discrete(limits=rev) +
+  xlim(-0.08, 0.2) +
+  labs(x = "MCV Difference to Baseline",
+       y = "Week",
+       title = "Change in Squat MCV Relative to Baseline",
+       subtitle = "Weekly MCV ± 90% CI")
+
+
+ggarrange(tbl, plt)
+
+```
+
+
+
+##### Are the changes meaningful?
+
+One thing the authors’ mention in the paper are some approaches to evaluating whether the observed changes are meaningful. They recommend using either **equivalence tests** or **second generation p-values**. However, they don’t go into calculating such things on their data. I honestly am not familiar with the latter option, so I'll instead create an example of using an equivalence test for the data and show how we can color the points within the plot to represent their meaningfulness.
+
+Equivalence testing has been discussed by Daniel Lakens and colleagues in their tutorial paper, [Lakens, D., Scheel, AM., Isager, PM. (2018). **Equivalence testing for psychological reserach: A tutorial**. *Advances in Methods and Practices in Psychological Science*. 2018; 1(2): 259-269.](https://journals.sagepub.com/doi/10.1177/2515245918770963)
+
+Briefly, equivalence testing uses one-sided t-tests to evaluate whether the observed effect is larger or smaller than a pre-specified range of values surrounding the effect of interest, termed the smallest effect size of interest (SESOI).
+
+In our above plot, we can consider the shaded range of values around 0 (-0.03 to 0.03. **NOTE: The value 0.03 was provided in the text as the meaningful change for this athlete to see an ~1% increase in his 1-RM max**) as the region where an observed effect would not be deemed interesting. Outside of those ranges would be differences between the observed effect and the `maintenance phase` baseline that we would be interested in. Additionally, the observed effect should be substantially large enough relative to the standard error that we calculated from our `maintenance phase` regression model earlier.
+
+Here, our null hypothesis is that the observed effect is between the smallest effect size of interest (SESOI), -0.03 to 0.03 (the grey shaded region) and our alternative hypothesis is that the observed effect is either less than the lower bound (-0.03) or greater than the upper bound (0.03). As we can see in the above plot, some of the observations reside in the grey, SESOI, region while others are above it (none of them are below it, which would have indicated that the athlete's velocity got slower).
+
+
+**How will this work:**
+
+Using two one-sided t-tests we will test whether our observed effects for each week are at least less than the lower bound (-0.03) or at least greater than the upper bound (0.03).
+
+If the effect is not lower than the lower bound or larger than the upper bound the we will reject our alternative hypotheses and accept the null, meaning that the observed effect is not different than the SESOI.
+
+**Let's try a single example**
+
+* Week 11 had a Squat MCV of 0.92, which was a difference from baseline of 0.02 [90% CI: -0.05, 0.09]
+* We calculate two one-sided t-tests evaluating whether this difference is smaller than -0.03 or larger than 0.03.
+
+```{r t-example}
+## Calculate the t-value and p-value for the difference between 0.02 and -0.03
+t_below <-  (0.02 - (-0.03)) / individual_se
+p_below <- pt(t_below, df = n - 1)
+
+## Calculate the t-value and p-value for the difference between 0.02 and 0.03
+t_above <- (0.02 - 0.03) / individual_se
+p_above <- 1-pt(t_above, df = n - 1)
+
+
+paste("p-value for lower bound is", round(p_below, 3), "while the p-value for the upper bound is", round(p_above, 3))
+```
+
+
+* Neither p-value is *significant* from our one-sided test. Thus, we can't be certain that this observed effect is outside of our SESOI.
+
+Lakens' suggests reporting the larger t-value/smaller p-value when reporting findings. So we will create a column that keeps track of the smaller p-value, for plotting purposes.
+
+**Now let's do it for all observations**
+
+```{r final-plt, fig.width = 12}
+plt <- training %>%
+  mutate(t_value_below = (diff - (-0.03)) / individual_se,
+         p_below = pt(t_value_below, df = 10 - 1),
+         t_value_above = (diff - 0.03) / individual_se,
+         p_above = 1 - pt(t_value_above, df = 10 - 1),
+         p_of_interest = ifelse(p_above < p_below, p_above, p_below)) %>%
+  ggplot(aes(x = diff, y = as.factor(week))) +
+  geom_rect(aes(xmin = -0.03, 
+                xmax = 0.03),
+            ymin = 0,
+            ymax = Inf,
+            fill = "light grey",
+            alpha = 0.5) +
+  geom_errorbar(aes(xmin = lower_ci, xmax = upper_ci),
+                width = 0.1) +
+  geom_vline(xintercept = 0,
+             size = 1.2) +
+  geom_point(size = 3,
+             aes(color = p_of_interest)) +
+  scale_color_gradient2(low = "red", mid = "white", high = "blue", midpoint = 0.32) +
+  scale_y_discrete(limits=rev) +
+  xlim(-0.08, 0.2) +
+  labs(x = "MCV Difference to Baseline",
+       y = "Week",
+       title = "Change in Squat MCV Relative to Baseline",
+       subtitle = "Weekly MCV ± 90% CI")
+
+ggarrange(tbl, plt)
+```
+
