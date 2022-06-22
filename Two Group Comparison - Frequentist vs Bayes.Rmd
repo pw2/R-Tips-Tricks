@@ -186,7 +186,7 @@ abline(v = 0,
 
 Next, to make this conjugate approach work we need to have a known standard deviation. In this example, we will not be estimating the joint posterior distributions (mean and SD). Rather, we are saying that we are interested in knowing the mean and the variability around it but we are going to have a fixed/known SD.
 
-Let's say we looked at some previously published scientific literature and also tried out the new program in a small pilot study of athletes and we find that our best assumption for the SD is 0.6.
+Let's say we looked at some previously published scientific literature and also tried out the new program in a small pilot study of athletes and we the improvements of a strength training program are normally distributed with a known SD of 0.6.
 
 ```{r}
 known_sd <- 0.6
@@ -219,7 +219,7 @@ control_precision <- 1 / control_var
 ```
 
 
-Now we are ready to update the observed study data for each group with our prior information and obtain posterior estimates.
+Now we are ready to update the observed study data for each group with our prior information and obtain posterior estimates. We will use the updating rules provided by William Bolstad in Chapter 13 of his book, [Introduction to Bayesian Statistics, 2nd Ed](https://www.amazon.com/Introduction-Bayesian-Statistics-William-Bolstad/dp/0470141158).
 
 ```{r}
 ##### Update the control group observations ######
@@ -378,3 +378,220 @@ abline(v = 0,
 
 
 #### Part 2: Group Comparison - Joint estimation of mean and SD
+
+We are comparing the differences in a change in strength score (pre to post) between groups: a group that had a normal training program and a group that was given a new/experimental strength training program.
+
+Review the data set.
+
+```{r}
+df %>%
+  head()
+```
+
+
+In Part 1, we compared the difference in outcomes between groups using a t-test (frequentist) and a Bayesian approach, where we took advantage of a normal conjugate distribution. In order to use the normal-normal conjugate, we needed to make an assumption about a known population standard deviation. By using a known standard deviation it meant that we only needed to perform Bayesian updating for the mean of the distribution, allowing us to compare between group means and their corresponding standard errors. The problem with this approach is that we might not always have a known standard deviation to apply, thus we would want to be able to estimate this along with the mean -- we need to estimate both parameters, jointly!
+
+To do this in the Bayesian framework we will work with a regression model where `group` (control or experimental) is the independent variable and the dependent variable is the change in strength score. We can do this because, recall, [t-tests are really just regression underneath](http://optimumsportsperformance.com/blog/t-test-anova-its-linear-regression-all-the-way-down/).
+
+Let's look at the output of a simple linear regression before trying a Bayesian regression.
+
+```{r}
+fit_lm <- lm(strength_score_change ~ group, data = df)
+summary(fit_lm)
+confint(fit_lm)
+
+t.test(strength_score_change ~ group, data = df)
+```
+
+
+As expected, the results that we get here are the same as those that we previously obtained from our t-test. The coefficient for the control group (-0.411) represents the difference in the mean strength score compared to the experimental group, whose mean change in strength score is accounted for in the intercept.
+
+Because the experimental group is now represented as the model intercept, we can instead code the model without an intercept and get a mean change in strength score for both groups. This is accomplished by adding a `0` to the right side of the equation, telling `R` that we don't want a model intercept.
+
+```{r}
+fit_lm2 <- lm(strength_score_change ~ 0 + group, data = df)
+summary(fit_lm2)
+confint(fit_lm2)
+```
+
+
+Okay, now let's move into the Bayesian framework. We'll utilize the help of the brilliant `brms` package, which compiles `C++` and runs the `Stan` language under the hood, allowing you to use the simple and friendly `R` syntax that you're used to.
+
+Let's start with a simple Bayesian Regression Model.
+
+```{r}
+library(brms)
+
+# Set 3 cores for parallel processing (helps with speed)
+fit_bayes1 <- brm(strength_score_change ~ group, 
+                 data = df,
+                 cores = 3,
+                 seed = 7849
+                 )
+
+summary(fit_bayes1)
+```
+
+
+The output here is a little more extensive than what we are used to with the normal regression output. Let's make some notes:
+
+* The control group coefficient still represents the mean difference in strength score compared to the experimental group.
+* The experimental groups mean strength score is still the intercept
+* The coefficients for the intercept and control group are the same that we obtained with the normal regression.
+* We have a new parameter at the bottom, `sigma`, which is a value of 0.50. This value represents the shared standard deviation between the two groups. If you recall the output of our frequentist regression model, we had a value called `residual standard error`, which was 0.48 (pretty similar). The one thing to add with our `sigma` value here is, like the model coefficients, it has its own error estimate and 95% Credible Intervals (which we do not get from the original regression output).
+
+Before going into posterior simulation, we have to note that we only got one `sigma` parameter. This is basically saying that the two groups in our model are sharing a standard deviation. This is similar to running a t-test with equal variances (**NOTE: the default in R's `t-test()` function is `var.equal = FALSE`, which is usually a safe assumption to make.**). To specify a `sigma` value for both groups we will wrap the equation in the `bf()` function, which is a function for specifying `brms` formulas. In there, we will indicate different sigma values for each group to be estimated. Additionally, to get a coefficient for both groups (versus the experimental group being the intercept), we will add a `0` to the right side of the equation, similar to what we did in our second frequentist regression model above.
+
+```{r}
+group_equation <- bf(strength_score_change ~ 0 + group,
+                     sigma ~ 0 + group)
+
+fit_bayes2 <- brm(group_equation, 
+                 data = df,
+                 cores = 3,
+                 seed = 7849
+                 )
+
+summary(fit_bayes2)
+```
+
+
+Now we have an estimate for each group (their mean change in strength score from pre to post testing) and a sigma value for each group(**NOTE: To get this value to the normal scale we need to take is exponential as they are on a log scale, as indicated by the `links` statement at the top of the model output, `sigma = log`.**). Additionally, we have credible intervals around the coefficients and sigmas.
+
+```{r}
+exp(-0.69)
+exp(-0.72)
+```
+
+
+We have not specified any priors yet, so we are just using the default priors. Before we try and specify any priors, let's get posterior samples from our model (don't forget to exponentiate the sigma values). We will also calculate a Cohen's d as a measure of standardized effect.
+
+$Cohens.d = (group.diff) / sqrt((group1.sd^2 + group2.sd^2) / 2)$
+
+```{r}
+bayes2_draws <- as_draws_df(fit_bayes2) %>%
+  mutate(across(.cols = contains("sigma"), 
+                ~exp(.x)),
+         group_diff = b_groupexperimental - b_groupcontrol,
+         cohens_d = group_diff / sqrt((b_sigma_groupexperimental^2 + b_sigma_groupcontrol^2)/2))
+
+bayes2_draws %>%
+  head()
+```
+
+
+Let's make a plot of the difference in means and Cohen's d across our 4000 posterior samples.
+
+```{r}
+par(mfrow = c(1,2))
+hist(bayes2_draws$group_diff,
+     main = "Posterior Draw of Group Differences",
+     xlab = "Group Differences")
+abline(v = 0,
+       col = "red",
+       lwd = 3,
+       lty = 2)
+hist(bayes2_draws$cohens_d,
+     main = "Posterior Draw of Cohen's d",
+     xlab = "Cohen's d")
+```
+
+
+Okay, now let's add some priors and repeat the process of plotting the posterior samples. We will use the same normal prior for the means that we used in Part 1, Normal(0.1, 0.3) and for the sigma value we will use a Cauchy prior, Cauchy(0, 1).
+
+```{r}
+## fit model
+fit_bayes3 <- brm(group_equation, 
+                 data = df,
+                 prior = c(
+                       set_prior("normal(0.1, 0.3)", class = "b"),
+                       set_prior("cauchy(0, 1)", class = "b", dpar = "sigma")
+                 ),
+                 cores = 3,
+                 seed = 7849
+                 )
+
+summary(fit_bayes3)
+
+## exponent of the sigma values
+exp(-0.66)
+exp(-0.70)
+
+## posterior draws
+bayes3_draws <- as_draws_df(fit_bayes3) %>%
+  mutate(across(.cols = contains("sigma"), 
+                ~exp(.x)),
+         group_diff = b_groupexperimental - b_groupcontrol,
+         cohens_d = group_diff / sqrt((b_sigma_groupexperimental^2 + b_sigma_groupcontrol^2)/2))
+
+bayes3_draws %>%
+  head()
+
+## plot sample of group differences and Cohen's d
+par(mfrow = c(1,2))
+hist(bayes3_draws$group_diff,
+     main = "Posterior Draw of Group Differences",
+     xlab = "Group Differences")
+abline(v = 0,
+       col = "red",
+       lwd = 3,
+       lty = 2)
+hist(bayes3_draws$cohens_d,
+     main = "Posterior Draw of Cohen's d",
+     xlab = "Cohen's d")
+```
+
+
+Combine all of the results together so we can evaluate what has happened.
+
+```{r}
+no_prior_sim_control_mu <- mean(bayes2_draws$b_groupcontrol)
+no_prior_sim_experimental_mu <- mean(bayes2_draws$b_groupexperimental)
+no_prior_sim_diff_mu <- mean(bayes2_draws$group_diff)
+
+no_prior_sim_control_sd <- sd(bayes2_draws$b_groupcontrol)
+no_prior_sim_experimental_sd <- sd(bayes2_draws$b_groupexperimental)
+no_prior_sim_diff_sd <- sd(bayes2_draws$group_diff)
+
+with_prior_sim_control_mu <- mean(bayes3_draws$b_groupcontrol)
+with_prior_sim_experimental_mu <- mean(bayes3_draws$b_groupexperimental)
+with_prior_sim_diff_mu <- mean(bayes3_draws$group_diff)
+
+with_prior_sim_control_sd <- sd(bayes3_draws$b_groupcontrol)
+with_prior_sim_experimental_sd <- sd(bayes3_draws$b_groupexperimental)
+with_prior_sim_diff_sd <- sd(bayes3_draws$group_diff)
+
+
+data.frame(
+  group = c("control", "experimental", "difference"),
+  observed_avg = c(control_mu, experimental_mu, t_test_diff),
+  posterior_sim_avg = c(posterior_mu_control, posterior_mu_experimental, mu_diff),
+  no_prior_sim_avg = c(no_prior_sim_control_mu, no_prior_sim_experimental_mu, no_prior_sim_diff_mu),
+  with_prior_sim_avg = c(with_prior_sim_control_mu, with_prior_sim_experimental_mu, with_prior_sim_diff_mu),
+  observed_standard_error = c(control_sd / sqrt(control_N), experimental_sd / sqrt(experimental_N), se_diff),
+  posterior_sim_standard_error = c(posterior_sd_control, posterior_sd_experimental, sd_diff),
+  no_prior_sim_standard_error = c(no_prior_sim_control_sd, no_prior_sim_experimental_sd, no_prior_sim_diff_sd),
+  with_prior_sim_standard_error = c(with_prior_sim_control_sd, with_prior_sim_experimental_sd, with_prior_sim_diff_sd)
+  ) %>%
+  mutate(across(.cols = -group,
+                ~round(.x, 3))) %>%
+  t() %>%
+  as.data.frame() %>%
+  setNames(., c("Control", "Experimental", "Difference")) %>%
+  slice(-1) %>%
+  mutate(models = rownames(.),
+    group = c("Average", "Average", "Average", "Average", "Standard Error", "Standard Error", "Standard Error", "Standard Error")) %>%
+  relocate(models, .before = Control) %>%
+  group_by(group) %>%
+  gt::gt()
+```
+
+Let's make some notes:
+
+* First, observed refers to the actual observed data, posterior_sim is our normal-normal conjugate (using a known standard deviation), no_prior_sim is our Bayesian regression with default priors and with_prior_sim is our Bayesian regression with pre-specified priors.
+
+* In the normal-normal conjugate (posterior_sim) analysis (Part 1), both the control and experimental groups saw their mean values get pulled closer to the prior leading to a smaller between group difference than we saw in the observed data.
+
+* The Bayesian regression with no priors specified (no_prior_sim) resulted in a mean difference that is pretty much identical to the outcome we saw with our t-test on the observed data.
+
+* The Bayesian Regression with specified priors (with_prior_sim) ends up being somewhere in the middle of the observe data/Bayes Regression with no priors and the normal-normal conjugate. The means for both groups are pulled close to the prior but not as much as the normal-normal conjugate means (posterior_sim). Therefore, the mean difference between groups is higher than the posterior_sim output but not as large as the observed data (because it is influenced by our prior). Additionally, the group standard errors are more similar to the observed data with the Bayesian regression with priors than the Bayesian regression without priors and the normal-normal Bayesian analysis.
