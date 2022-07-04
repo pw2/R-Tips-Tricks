@@ -1,0 +1,333 @@
+---
+title: "Making Predictions with a Bayesian Regression Model"
+author: "Patrick Ward"
+date: "7/3/2022"
+output: html_document
+---
+
+## Intro
+
+One of my favorite podcasts is [Wharton Moneyball](https://businessradio.wharton.upenn.edu/wharton-moneyball/). I listen every week, usually during my weekly long run, and I never miss an episode. This past week the hosts were discussing an email they received from a listener, a medical doctor, who encouraged them add a disclaimer before their COVID discussions because he felt that some listeners may interpret their words as medical advice. This turned into a conversation amongst the hosts of the show about how they are reading and interpreting the stats within the COVID studies and an explanation of the difference between the average population effect and an effect for a single individual within a population are two very different things.
+
+The discussion made me think a lot about the difference between nomothetic (group-based) research and idographic (individual person) research, which myself and some colleagues discussed in a 2017 paper in the International Journal of Sports Physiology and Performance, [Putting the “I” back in team](https://pubmed.ncbi.nlm.nih.gov/29952669/). It also made me think about something Gelman and colleagues discussed in their brilliant book, [Regression and Other Stories](https://www.amazon.com/Regression-Stories-Analytical-Methods-Research/dp/110702398X). In Chapter 9, the authors’ discussion Prediction & Bayesian Inference and detail three types of predictions we may seek to make from our Bayesian regression model:
+
+1. A point prediction
+2. A point prediction with uncertainty
+3. A predictive distribution for a new observation in the population
+
+The first two points are directed at the population average and seek to answer the question, “What is the average prediction, ‘y’, in the population for someone exhibiting variables ‘x’?” and, “How much uncertainty is there around the average population prediction?” Point 3 is a little more interesting and also one of the valuable aspects of Bayesian analysis. Here, we are attempting to move away from the population and say something specific about an individual within the population. Of course, making a statement about an individual within a population will come with a large amount of uncertainty, which we can explore more specifically with our Bayes model by plotting a distribution of posterior predictions.
+
+
+## The Data
+
+We will use the Palmer Penguins data, from the `palmerpenguis` package in R. To keep things simple, we will deal with the Adelie species and build a simple regression model with the independent variable `bill_length_mm` and dependent variable `bill_depth_mm`.
+
+Let's quickly look at the data.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(palmerpenguins)
+library(rstanarm)
+
+theme_set(theme_classic())
+
+dat <- na.omit(penguins)
+adelie <- dat %>% 
+  filter(species == "Adelie") %>%
+  select(bill_length_mm, bill_depth_mm)
+
+adelie %>%
+  ggplot(aes(x = bill_length_mm, y = bill_depth_mm)) +
+  geom_smooth(method = "lm",
+              size = 2,
+              color = "black",
+              se = FALSE) +
+  geom_point(size = 5,
+             shape = 21,
+             fill = "grey",
+             color = "black") +
+  labs(x = "Bill Length (mm)",
+       y = "Bill Depth (mm)",
+       title = "Bill Depth ~ Bill Length",
+       subtitle = "Adelie Penguins")
+```
+
+
+## The Model
+
+Since I have no real prior knowledge about the bill length or bill depth of penguins, I'll stick with the default priors provided by `rstanarm`.
+
+```{r}
+fit <- stan_glm(bill_depth_mm ~ bill_length_mm, data = adelie)
+summary(fit)
+
+```
+
+
+## Making predictions on a new penguin
+
+Let's say we observe a new Adelie penguin with a bill length of 41.3 and we want to predict what the bill depth would be. There are two ways to go about this using `rstanarm`. The first is to use the built in functions for the `rstanarm` package. The second is to extract posterior samples from the `rstanarm` model fit and build our distribution from there. We will take each of the above three prediction types in turn, using the built in functions, and then finish by extracting posterior samples and confirm what we obtained with the built in functions using the full distribution.
+
+```{r}
+new_bird <- data.frame(bill_length_mm = 41.3)
+```
+
+
+**1. Point Prediction**
+
+Here, we want to know the average bill depth in the population for an Adelie penguin with a bill length of 41.3mm. We can obtain this with the `predict()` function or we can extract out the coefficients from our model and perform the linear equation ourselves. Let's do both!
+
+```{r}
+# predict() function
+predict(fit, newdata = new_bird)
+
+# linear equation by hand
+intercept <- broom.mixed::tidy(fit)[1, 2]
+bill_length_coef <- broom.mixed::tidy(fit)[2, 2]
+
+intercept + bill_length_coef * new_bird$bill_length_mm
+
+```
+
+
+We predict an Adelie with a bill length of 41.3 to have, on average, a bill depth of 18.8. Let's put that point in our plot to where it falls with the rest of the data.
+
+```{r}
+adelie %>%
+  ggplot(aes(x = bill_length_mm, y = bill_depth_mm)) +
+  geom_smooth(method = "lm",
+              size = 2,
+              color = "black",
+              se = FALSE) +
+  geom_point(size = 5,
+             shape = 21,
+             fill = "grey",
+             color = "black") +
+    geom_point(aes(x = 41.3, y = 18.8),
+             size = 5,
+             shape = 21,
+             fill = "palegreen",
+             color = "black") +
+  labs(x = "Bill Length (mm)",
+       y = "Bill Depth (mm)",
+       title = "Bill Depth ~ Bill Length",
+       subtitle = "Adelie Penguins")
+```
+
+
+There it is, in green! Our new point for a bill length of 41.3 falls smack on top of the linear regression line, the population average predicted bill depth given this bill length. That's awful precise! Surely there has to be some uncertainty around this new point, right?
+
+**2. Point prediction with uncertainty**
+
+To obtain the uncertainty around the predicted point estimate we use the `posterior_linpred()` function.
+
+```{r}
+new_bird_pred_pop <- posterior_linpred(fit, newdata = new_bird)
+
+hist(new_bird_pred_pop)
+
+mean(new_bird_pred_pop)
+sd(new_bird_pred_pop)
+qnorm(p = c(0.025, 0.975), mean = mean(new_bird_pred_pop), sd(new_bird_pred_pop))
+```
+
+
+What `posterior_linpred()` produced is a vector of posterior draws (predictions) for our new bird. This allowed us to visualize a distribution of potential bill depths. Additionally, we can take that vector of posterior draws and find that we predict an Adelie penguin with a bill length of 41.3 mm to have a bill depth of 18.8 mm, the same value we obtained in our point estimate prediction, with a 95% credible interval between 18.5 and 19.0.
+
+Both of these approaches are still working at the population level. What if we want to get down to an individual level and make a prediction of bill depth for a specific penguin in the population? Given that individuals within a population will have a number of factors that make them unique, we need to assume more uncertainty.
+
+**3. A predictive distribution for a new observation in the population**
+
+To obtain a prediction with uncertainty at the individual level, we use the `posterior_predict()` function. This function will produce a vector of uncertainty that is much larger than what we saw above, as it is using the model error in the prediction.
+
+```{r}
+new_bird_pred_ind <- posterior_predict(fit, newdata = new_bird)
+head(new_bird_pred_ind)
+
+
+hist(new_bird_pred_ind,
+     xlab = "Bill Depth (mm)",
+     main = "Distribution of Predicted Bill Depths\nfor a New Penguin with a Bill Length of 41.3mm")
+abline(v = mean(new_bird_pred_ind[,1]),
+       col = "red",
+       lwd = 6,
+       lty = 2)
+
+mean(new_bird_pred_ind)
+sd(new_bird_pred_ind)
+mean(new_bird_pred_ind) + qnorm(p = c(0.025, 0.975)) * sd(new_bird_pred_ind)
+
+```
+
+
+Similar to the prediction and uncertainty for the average in the population, we can extract the mean predicted value with 95% credible intervals for the new bird. As explained previously, the uncertainty is larger that estimating a population value. Here, we have a mean prediction for bill depth of 18.8 mm, the same as we obtained in the population example. Our 95% Credible, however, has increased to a range of potential values between 16.6 and 21.0 mm.
+
+Let's visualize this new point with its uncertainty together with the original data.
+
+```{r}
+new_df <- data.frame(
+  bill_length_mm = 41.3,
+  bill_depth_mm = 18.8,
+  low = 16.6,
+  high = 21.0
+)
+
+
+adelie %>%
+  ggplot(aes(x = bill_length_mm, y = bill_depth_mm)) +
+  geom_smooth(method = "lm",
+              size = 2,
+              color = "black",
+              se = FALSE) +
+  geom_point(size = 5,
+             shape = 21,
+             fill = "grey",
+             color = "black") +
+ geom_errorbar(aes(ymin = low, ymax = high),
+               data = new_df,
+               linetype = "dashed",
+               color = "red",
+               width = 0,
+               size = 2) +
+  geom_point(aes(x = bill_length_mm, y = bill_depth_mm),
+             data = new_df,
+             size = 5,
+             shape = 21,
+             fill = "palegreen",
+             color = "black") +
+  labs(x = "Bill Length (mm)",
+       y = "Bill Depth (mm)",
+       title = "Bill Depth ~ Bill Length",
+       subtitle = "Adelie Penguins")
+```
+
+
+Notice how much uncertainty we now have (red dashed errorbar) in our prediction!
+
+Okay, so what is going on here? To unpack this, let's pull out samples from the posterior distribution.
+
+
+## Extract samples from the posterior distribution
+
+We extract our samples using the `as.matrix()` function. This produced 4000 random samples of the intercept, bill_length_mm coefficient, and the sigma (error). I've also summarize the mean for each of these three values below. Notice that the mean across all of the samples are the same values we obtained in the summary output of our model fit.
+
+```{r}
+posterior_samp <- as.matrix(fit)
+head(posterior_samp)
+nrow(posterior_samp)
+
+colMeans(posterior_samp)
+```
+
+
+We can visualize uncertainty around all three model parameters and also plot the original data and the regression line from our samples.
+
+```{r}
+par(mfrow = c(2,2))
+hist(posterior_samp[,1], main = 'intercept',
+     xlab = "Model Intercept")
+hist(posterior_samp[,2], main = 'beta coefficient',
+     xlab = "Bill Length Coefficient")
+hist(posterior_samp[,3], main = 'model sigma',
+     xlab = "sigma")
+plot(adelie$bill_length_mm, adelie$bill_depth_mm, 
+     pch = 19, 
+     col = 'grey',
+       xlab = "Bill Length (mm)",
+       ylab = "Bill Depth (mm)",
+       main = "Bill Depth ~ Bill Length")
+abline(a = mean(posterior_samp[, 1]),
+       b = mean(posterior_samp[, 2]),
+       col = "red",
+       lwd = 3,
+       lty = 2)
+```
+
+
+Let's make a point prediction for the average bill depth in the population based on the bill length of 41.3mm from our new bird and confirm those results with what we obtained from the `predict()` function.
+
+
+```{r}
+intercept_samp <- colMeans(posterior_samp)[1]
+bill_length_coef_samp <- colMeans(posterior_samp)[2]
+
+intercept_samp + bill_length_coef_samp * new_bird$bill_length_mm
+
+# confirm with the results from the predict() function
+predict(fit, newdata = new_bird)
+```
+
+
+Next, we can make a population prediction with uncertainty, which will be the standard error around the population mean prediction. These results produce a mean and standard deviation for the predicted response. We confirm our results to those we obtained with the `posterior_linpred()` function above.
+
+```{r}
+intercept_vector <- posterior_samp[, 1]
+beta_coef_vector <- posterior_samp[, 2]
+
+pred_vector <- intercept_vector + beta_coef_vector * new_bird$bill_length_mm
+head(pred_vector)
+
+## Get summary statistics for the population prediction with uncertainty
+mean(pred_vector)
+sd(pred_vector)
+qnorm(p = c(0.025, 0.975), mean = mean(pred_vector), sd(pred_vector))
+
+## confirm with the results from the posterior_linpred() function
+mean(new_bird_pred_pop)
+sd(new_bird_pred_pop)
+qnorm(p = c(0.025, 0.975), mean = mean(new_bird_pred_pop), sd(new_bird_pred_pop))
+
+```
+
+
+Finally, we can use the samples from our posterior distribution to predict the bill depth for an individual within the population, obtaining a full distribution to summarize our uncertainty. We will compare this with the results obtained from the `posterior_predict()` function.
+
+To make this work, we use the intercept and beta coefficient vectors we produced above for the population prediction with uncertainty. However, in the above example the uncertainty was the standard error of the mean for bill depth. Here, we need to obtain a third vector, the vector of sigma values from our posterior distribution samples. Using that sigma vector we will add uncertainty to our predictions by taking a random sample from a normal distribution with a mean of 0 and a standard deviation of the sigma values.
+
+```{r}
+sigma_samples <- posterior_samp[, 3]
+n_samples <- length(sigma_samples)
+
+individual_pred <- intercept_vector + beta_coef_vector * new_bird$bill_length_mm + rnorm(n = n_samples, mean = 0, sd = sigma_samples)
+
+head(individual_pred)
+
+## summary statistics
+mean(individual_pred)
+sd(individual_pred)
+mean(individual_pred) + qnorm(p = c(0.025, 0.975)) * sd(individual_pred)
+
+## confirm results obtained from the posterior_predict() function
+mean(new_bird_pred_ind)
+sd(new_bird_pred_ind)
+mean(new_bird_pred_ind) + qnorm(p = c(0.025, 0.975)) * sd(new_bird_pred_ind)
+```
+
+
+We obtain nearly the exact same results that we did with the `posterior_predict()` function aside form some rounding differences. This occurs because the error for the prediction is using a random number generator with mean 0 and standard deviation of the sigma values, so the results are not exactly the same every time.
+
+
+## Wrapping Up
+
+So there you have it, three types of predictions we can obtain from a Bayesian regression model. You can easily obtain these from the designed functions from the `rstanarm` package or you can extract a sample from the posterior distribution and make the predictions yourself as well as create visualizations of model uncertainty.
+
+
+## Same type of analysis in `brms`
+
+```{r}
+detach(package:rstanarm)
+library(brms)
+
+fit_brms <- brm(bill_depth_mm ~ bill_length_mm, data = adelie)
+summary(fit_brms)
+
+## get samples from posterior distribution
+brms_samps <- as.matrix(fit_brms)
+head(brms_samps)
+
+## predict the new bill depth for individual in the population
+predict(fit_brms, newdata = new_bird)
+
+```
+
