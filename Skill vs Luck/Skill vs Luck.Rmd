@@ -1,0 +1,248 @@
+---
+title: "Skill vs Luck"
+author: "Patrick Ward"
+date: "12/3/2022"
+output: html_document
+---
+
+## Load libraries and data
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(gt)
+
+## Get data from "pro_sport_win_tables.xlsx"
+premier_lg <- readxl::read_excel("pro_sport_win_tables.xlsx", sheet = 'premier league')
+nhl <- readxl::read_excel("pro_sport_win_tables.xlsx", sheet = 'nhl')
+nba <- readxl::read_excel("pro_sport_win_tables.xlsx", sheet = 'nba')
+nfl <- readxl::read_excel("pro_sport_win_tables.xlsx", sheet = 'nfl')
+mlb <- readxl::read_excel("pro_sport_win_tables.xlsx", sheet = 'mlb')
+
+```
+
+
+**From The Success Equation by Michael Mauboussin (pg. 78)**
+
+$Variance(Observed) = Variance(Skill) + Variance(Luck)$
+
+
+Since we can estimate the Variance(Observed), which is the standard deviation of win% across a league, and we can estimate the Variance(Luck), which is the standard deviation of the league win%, with a little bit of algebra, the above equation becomes:
+
+$Variance(Skill) = Variance(Observed) - Variance(Luck)$
+
+**However, what we care about here is the contribution of luck to winning. This is calculated via the following ratio:**
+
+$Contribution.of.Luck = Variance(Luck) / Variance(Observed)$
+
+
+Create a function for these calculations
+
+```{r}
+league_perf <- function(avg_win_pct, obs_sd, luck_sd, league){
+  
+  ## convert standard deviations to variance
+  var_obs <- obs_sd^2
+  var_luck <- luck_sd^2
+  
+  ## calculate the variation due to skill
+  var_skill <- var_obs + var_luck
+  
+  ## calculate the contribution of luck to winning
+  luck_contribution <- var_luck / var_obs
+  
+  
+  ## Results table
+  output <- tibble(
+    league = {{league}},
+    avg_win_pct = avg_win_pct,
+    luck_contribution = luck_contribution,
+  )
+  
+  return(output)
+  
+}
+```
+
+
+
+## Premier League Soccer
+
+```{r}
+## get info for function
+# NOTE: Treating Draws as 1/3 of a win, since that reflects the points the team is awarded in the standings
+premier_lg %>%
+  select(Squad, MP, W, D) %>%
+  mutate(win_pct = (W + 1/3*D) / MP) %>%
+  summarize(games = max(MP),
+            avg_win_pct = mean(win_pct),
+            obs_sd = sd(win_pct),
+            luck_sd = sqrt((avg_win_pct * (1 - avg_win_pct)) / games))
+
+## Run the function
+premier_lg_output <- league_perf(avg_win_pct = 0.462,
+                                 obs_sd = 0.155,
+                                 luck_sd = 0.0809,
+                                 league = "Premier League")
+
+premier_lg_output
+```
+
+## NHL
+
+```{r}
+## get info for function
+nhl %>%
+  select(Season, Tm, GP, W) %>% 
+  mutate(win_pct = W / GP) %>%
+  summarize(games = max(GP),
+            avg_win_pct = mean(win_pct),
+            obs_sd = sd(win_pct),
+            luck_sd = sqrt((avg_win_pct * (1 - avg_win_pct)) / games))
+
+## Run the function
+nhl_output <- league_perf(avg_win_pct = 0.5,
+                                 obs_sd = 0.116,
+                                 luck_sd = 0.0552,
+                                 league = "NHL")
+
+nhl_output
+
+## 2008 - 2012 NHL Results
+nhl2008_2012 <- readxl::read_excel("2008-2012 NHL Results.xlsx")
+
+nhl2008_2012 %>%
+  select(team, GP, W) %>% 
+  mutate(win_pct = W / GP) %>%
+  summarize(games = max(GP),
+            avg_win_pct = mean(win_pct),
+            obs_sd = sd(win_pct),
+            luck_sd = sqrt((avg_win_pct * (1 - avg_win_pct)) / games))
+
+nhl2008_2012_output <- league_perf(avg_win_pct = 0.5,
+           obs_sd = 0.0799,
+           luck_sd = 0.0552,
+           league = "NHL 2008-2012")
+
+nhl2008_2012_output
+```
+
+
+## NBA
+
+```{r}
+## get info for function
+nba %>%
+  select(season, team, W, L, win_pct) %>% 
+  summarize(games = max(W + L),
+            avg_win_pct = mean(win_pct),
+            obs_sd = sd(win_pct),
+            luck_sd = sqrt((avg_win_pct * (1 - avg_win_pct)) / games))
+
+## Run the function
+nba_output <- league_perf(avg_win_pct = 0.498,
+                                 obs_sd = 0.143,
+                                 luck_sd = 0.0552,
+                                 league = "NBA")
+
+nba_output
+```
+
+
+## NFL
+
+```{r}
+## get info for function
+nfl %>%
+  select(season, Tm, W, L, win_pct) %>% 
+  summarize(games = max(W + L),
+            avg_win_pct = mean(win_pct),
+            obs_sd = sd(win_pct),
+            luck_sd = sqrt((avg_win_pct * (1 - avg_win_pct)) / games))
+
+## Run the function
+nfl_output <- league_perf(avg_win_pct = 0.5,
+                                 obs_sd = 0.194,
+                                 luck_sd = 0.121,
+                                 league = "NFL")
+
+nfl_output
+```
+
+
+## MLB
+
+```{r}
+## get info for function
+mlb %>%
+  filter(season != 2020) %>%
+  select(season, Tm, W, L, win_pct) %>% 
+  summarize(games = max(W + L),
+            avg_win_pct = mean(win_pct),
+            obs_sd = sd(win_pct),
+            luck_sd = sqrt((avg_win_pct * (1 - avg_win_pct)) / games))
+
+## Run the function
+mlb_output <- league_perf(avg_win_pct = 0.5,
+                                 obs_sd = 0.0916,
+                                 luck_sd = 0.0393,
+                                 league = "MLB")
+
+mlb_output
+
+## 2007 - 2011 MLB Results
+mlb2007_2011 <- readxl::read_excel("2007-2011 MLB Results.xlsx")
+
+mlb2007_2011 %>%
+  select(Tm, W, L, win_pct) %>% 
+  summarize(games = 162,
+            avg_win_pct = mean(win_pct),
+            obs_sd = sd(win_pct),
+            luck_sd = sqrt((avg_win_pct * (1 - avg_win_pct)) / games))
+
+## Run the function
+mlb2007_2011_output <- league_perf(avg_win_pct = 0.5,
+                                 obs_sd = 0.0661,
+                                 luck_sd = 0.0392,
+                                 league = "MLB 2007-2011")
+
+mlb2007_2011_output
+
+```
+
+
+## Results Table
+
+```{r}
+bind_rows(
+  premier_lg_output,
+  nhl_output,
+  nba_output,
+  nfl_output,
+  mlb_output
+) %>%
+  arrange(luck_contribution) %>%
+  gt(rowname_col = "league") %>%
+  cols_label(
+    avg_win_pct = md("**Lg Avg Win%**"),
+    luck_contribution = md("**% Contribution of\nLuck on Winning**")
+  ) %>%
+  fmt_percent(columns = avg_win_pct:luck_contribution,
+              decimals = 1)
+
+## historic data
+bind_rows(
+  nhl2008_2012_output,
+  mlb2007_2011_output
+) %>%
+  arrange(luck_contribution) %>%
+  gt(rowname_col = "league") %>%
+  cols_label(
+    avg_win_pct = md("**Lg Avg Win%**"),
+    luck_contribution = md("**% Contribution of\nLuck on Winning**")
+  ) %>%
+  fmt_percent(columns = avg_win_pct:luck_contribution,
+              decimals = 1)
+```
+
