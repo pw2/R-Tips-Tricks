@@ -8,7 +8,7 @@ library(zoo)
 set.seed(45)
 d <- tibble(
   day = 1:10,
-  training_load = round(runif(n = 10, min = 250, max = 350), 0)
+  training_load = round(rnorm(n = 10, min = 250, max = 350), 0)
 )
 
 d
