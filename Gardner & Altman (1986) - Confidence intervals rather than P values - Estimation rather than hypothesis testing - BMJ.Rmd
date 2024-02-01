@@ -1,0 +1,269 @@
+---
+title: 'Gardner & Altman. (1986). Confidence intervals rather than P values: Estimation
+  rather than hypothesis testing'
+author: "Patrick Ward"
+date: "1/30/2024"
+output: html_document
+---
+
+**Reference:** Gardner, MJ. Altman, DG. (1986). Confidence intervals rather than P values: Estimation rather than hypothesis testing. Brit Med J; 292:746-750.
+
+# Introduction
+
+* Research often focuses on null hypothesis significance testing with the goal being to identify statistically significant results.
+* However, we are often interested in the magnitude of the factor of interest
+* Given that research deals with samples of a broader population, the readers are not only interested in the observed magnitude of the estimand but also the degree of variability and plausible range of values for the population. This variability can be quantified using confidence intervals.
+
+
+# Confidence Intervals for Means and their Differences
+
+### Single Sample
+
+1. Obtain the mean
+2. Calculate the standard error (SE) of the mean as $SE = SD/sqrt(N)$
+3. Multiply by a t-critical value specific to the level of confidence of interest and the degrees of freedom (DF) for the single sample, $DF = N - 1$
+
+The confidence intervals are calculated as:
+
+$Low = mean - t_{crit} * SE$
+$High = mean + t_{crit} * SE$
+
+**Example**
+
+* We collect data on 30 participants on a special test of strength and observe a mean of 40 and standard deviation of 10. We want to calculate the 90% confidence interval.
+
+```{r}
+## Known info
+N <- 30
+avg <- 40
+SD <- 10
+
+## Calculate DF and SE
+SE <- SD / sqrt(N)
+DF <- N - 1
+
+## Calculate the confidence level of interest (90%), the amount of data in each of the the two tails ((1 - level of interest) / 2) and the t-critical value
+level_of_interest <- 0.90
+tail_value <- (1 - level_of_interest)/2
+
+t_crit <- abs(qt(tail_value, df = DF))
+t_crit
+
+## Calculate the 90% CI
+low90 <- round(avg - t_crit * SE, 1)
+high90 <- round(avg + t_crit * SE, 1)
+
+cat("The 90% Confidence Interval is:", low90, " to ", high90)
+```
+
+
+### Two Samples
+
+1. Obtain the sample mean and standard deviations for the two samples
+2. Pool the estimate of the standard deviation:
+
+$s = sqrt(((n_1 - 1)*s^2_1 + n_2 - 1)*s^2_2) / (n_1 + n_2 - 2))$
+
+3. Calculate the SE for the difference:
+
+$SE_{diff} = s * sqrt(1/n_1 + 1/n_2)$
+
+4. Calculate the confidence interval as:
+
+$Low = (x_1 - x_2) - t_{crit} * SE_{diff}$
+$High = (x_1 - x_2) + t_{crit} * SE_{diff}$
+
+**Example**
+
+The example in the paper provides the following info:
+
+* Blood pressure levels were measured in 100 diabetic and 100 non-diabetic men aged 40-49 years old.
+
+* Mean systolic blood pressure was 146.4 mmHg (SD = 18.5) in diabetics and 140.4 mmHg (SD = 16.8) in non-diabetics.
+
+Calculate the 95% CI.
+
+```{r}
+## store the known data
+N_diabetic <- 100
+N_non_diabetic <- 100
+diabetic_avg <- 146.4
+diabetic_sd <- 18.5
+non_diabetic_avg <- 140.4
+non_diabetic_sd <- 16.8
+
+## calculate the difference in means, the pooled SD, and the SE of diff
+group_diff <- diabetic_avg - non_diabetic_avg
+
+pooled_sd <- sqrt(((N_diabetic - 1)*diabetic_sd^2 + (N_non_diabetic - 1)*non_diabetic_sd^2) / (N_diabetic + N_non_diabetic - 2))
+
+se_diff <- pooled_sd * sqrt(1/N_diabetic + 1/N_non_diabetic)
+
+## Calculate the confidence level of interest (95%), the amount of data in each of the the two tails ((1 - level of interest) / 2) and the t-critical value
+level_of_interest <- 0.95
+tail_value <- (1 - level_of_interest)/2
+
+t_crit <- abs(qt(tail_value, df = N_diabetic + N_non_diabetic - 2))
+t_crit
+
+## Calculate the 95% CI
+low95 <- round(group_diff - t_crit * se_diff, 1)
+high95 <- round(group_diff + t_crit * se_diff, 1)
+
+cat("The 95% Confidence Interval is:", low95, " to ", high95)
+```
+
+
+# Confidence Intervals for Proportions
+
+### Single Sample
+
+1. Obtain the proportion for the population
+2. Calculate the SE of the proportion, $SE = sqrt((p * (1-p)) / N)$
+3. Obtain the z-critical value from a standard normal distribution for the level of confidence of interest (since the value for a proportion does not depend on sample size as it does for means)
+4. Calcuate the confidence interval:
+
+$low = p - z_{crit} * SE$
+$high = p + z_{crit} * SE$
+
+**Example**
+
+We observe a basketball player with 80 field goal attempts and a FG% of 39%. Calculate the 90% CI.
+
+```{r}
+## Store the known info
+N <- 80
+fg_pct <- 0.39
+
+## Calculate SE
+se <- sqrt((fg_pct * (1 - fg_pct)) / N)
+
+## Calculate z-critical value for 50% confidence
+level_of_interest <- 0.95
+tail_value <- (1 - level_of_interest) / 2
+z_crit <- qnorm(p = tail_value, lower.tail = FALSE)
+
+## Calculate the 95% CI
+low95 <- round(fg_pct - z_crit * se, 3)
+high95 <- round(fg_pct + z_crit * se, 3)
+
+cat("The 95% Confidence Interval is:", low95, " to ", high95)
+```
+
+
+### Two Samples
+
+1. Calculate the difference in proportions between the two groups
+2. Calculate the SE of the difference in proportions:
+
+$SE_{diff} = sqrt(((p_1 * (1-p_1)) / n_1) + ((p_2 * (1 - p_2)) / n_2))$
+
+3. Calculate the z-critical value for the level of interest
+4. Calculate the confidence interval as:
+
+$low = (p_1 - p_2) - (z_{crit} * se_{diff})$
+$high = (p_1 - p_2) + (z_{crit} * se_{diff})$
+
+**Example of two unpaired samples**
+
+The study provides the following table of example data:
+
+```{r}
+data.frame(
+  response = c("improvement", "no improvement", "total"),
+  treatment_A = c(61, 19, 80),
+  treatment_B = c(45, 35, 80)
+)
+```
+
+
+The difference we are interested in is between the proportion who improved in treatment A and the proportion of those who improved in treatment B.
+
+
+```{r}
+## Obtain the two proportions from the table and total sample sizes
+pr_A <- 61/80
+n_A <- 80
+pr_B <- 45/80
+n_B <- 80
+
+## calculate the difference in proportions
+diff_pr <- pr_A - pr_B
+
+## Calculate the SE
+se_diff <- sqrt((pr_A * (1 - pr_A))/n_A + (pr_B * (1 - pr_B))/n_B)
+
+## Get z-critical value for 95% confidence
+level_of_interest <- 0.95
+tail_value <- (1 - level_of_interest) / 2
+z_crit <- qnorm(p = tail_value, lower.tail = FALSE)
+
+## Calculate the 95% CI
+low95 <- round(diff_pr - z_crit * se_diff, 3)
+high95 <- round(diff_pr + z_crit * se_diff, 3)
+
+cat("The 95% Confidence Interval is:", low95, " to ", high95)
+```
+
+
+**Example for two paired samples**
+
+We can organize the data in a table like this:
+
+```{r}
+data.frame(
+  test_1 = c("Present", "Present", "Absent", "Absent"),
+  test_2 = c("Present", "Absent", "Present", "Absent"),
+  number_of_subjects = c("a", "b", "c", "d")
+)
+```
+
+
+Let's say we measured a group of subjects for a specific disease twice in a study. A subject either has the disease (present) or does not (absent) in the two time points. We observe the following data:
+
+```{r}
+dat <- data.frame(
+  test_1 = c("Present", "Present", "Absent", "Absent"),
+  test_2 = c("Present", "Absent", "Present", "Absent"),
+  number_of_subjects = c(10, 25, 45, 5)
+)
+
+dat
+
+## total sample size
+N <- sum(dat$number_of_subjects)
+```
+
+
+If we care about comparing those that had the disease (Present) on both occasions (both Test1 and Test2) we calculate them as:
+
+$p_1 = (a + b) / N$
+$p_2 = (a + c) / N$
+$Diff = p_1 - p_2$
+
+The SE of the difference is:
+
+$SE_{diff} = 1/N * sqrt(b + c - (b-c)^2/N)$
+
+```{r}
+## Obtain the info we need from the table
+p1 <- (10 + 25) / N
+p2 <- (10 + 45) / N
+diff_prop <- p1 - p2
+diff_prop
+
+## Calculate the SE of the difference
+se_diff <- 1 / N * sqrt(25 + 45 - (25+45)^2/N)
+
+## Get z-critical value for 95% confidence
+level_of_interest <- 0.95
+tail_value <- (1 - level_of_interest) / 2
+z_crit <- qnorm(p = tail_value, lower.tail = FALSE)
+
+## Calculate the 95% CI
+low95 <- round(diff_prop - z_crit * se_diff, 3)
+high95 <- round(diff_prop + z_crit * se_diff, 3)
+
+cat("The 95% Confidence Interval is:", low95, " to ", high95)
+```
+
